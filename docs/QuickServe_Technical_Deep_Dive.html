@@ -1,0 +1,988 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QuickServe — Technical Deep Dive</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8; --accent2: #818cf8; --green: #4ade80; --orange: #fb923c; --red: #f87171; --code-bg: #0d1117; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 2.2rem; background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
+  .subtitle { color: var(--muted); font-size: 1.1rem; margin-bottom: 48px; }
+  h2 { font-size: 1.6rem; color: var(--accent); margin: 48px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.2rem; color: var(--accent2); margin: 32px 0 12px; }
+  h4 { font-size: 1rem; color: var(--orange); margin: 20px 0 8px; }
+  p { margin-bottom: 16px; color: var(--text); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin: 16px 0; }
+  .card-green { border-left: 4px solid var(--green); }
+  .card-orange { border-left: 4px solid var(--orange); }
+  .card-blue { border-left: 4px solid var(--accent); }
+  .card-purple { border-left: 4px solid var(--accent2); }
+  .card-red { border-left: 4px solid var(--red); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 12px 0; font-size: 0.85rem; line-height: 1.5; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; color: var(--green); }
+  pre code { color: var(--text); }
+  .keyword { color: var(--accent2); }
+  .string { color: var(--green); }
+  .comment { color: var(--muted); font-style: italic; }
+  .annotation { color: var(--orange); }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--card); color: var(--accent); text-align: left; padding: 12px; border: 1px solid var(--border); }
+  td { padding: 10px 12px; border: 1px solid var(--border); }
+  tr:nth-child(even) { background: rgba(30, 41, 59, 0.5); }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge-green { background: rgba(74, 222, 128, 0.15); color: var(--green); }
+  .badge-orange { background: rgba(251, 146, 60, 0.15); color: var(--orange); }
+  .badge-blue { background: rgba(56, 189, 248, 0.15); color: var(--accent); }
+  .badge-purple { background: rgba(129, 140, 248, 0.15); color: var(--accent2); }
+  .flow-diagram { background: var(--code-bg); border-radius: 12px; padding: 20px; margin: 16px 0; font-family: monospace; font-size: 0.85rem; white-space: pre; overflow-x: auto; line-height: 1.6; color: var(--muted); }
+  .flow-diagram .highlight { color: var(--accent); font-weight: bold; }
+  .flow-diagram .status { color: var(--green); font-weight: bold; }
+  .flow-diagram .arrow { color: var(--orange); }
+  .toc { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px 32px; margin: 24px 0; }
+  .toc h3 { margin-top: 0; color: var(--accent); }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 6px 0; }
+  .toc a { color: var(--accent2); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  @media (max-width: 640px) { .comparison { grid-template-columns: 1fr; } }
+  .vs-label { text-align: center; font-size: 1.5rem; font-weight: bold; color: var(--muted); align-self: center; }
+  ul { padding-left: 20px; margin-bottom: 16px; }
+  li { margin-bottom: 6px; }
+  .emoji { font-size: 1.2rem; }
+  footer { text-align: center; color: var(--muted); margin-top: 64px; padding: 24px; border-top: 1px solid var(--border); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🛠️ QuickServe — Technical Deep Dive</h1>
+<p class="subtitle">Real-Time Notifications (SSE + Kafka) &amp; Advance Payment Flow — Architecture, Design Decisions &amp; Implementation</p>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+<h3>📑 Table of Contents</h3>
+<ol>
+<li><a href="#overview">Project Overview &amp; Tech Stack</a></li>
+<li><a href="#problem">The Problem — Why Real-Time Notifications?</a></li>
+<li><a href="#polling-vs-sse">Design Decision: Polling vs SSE vs WebSocket</a></li>
+<li><a href="#sse-deep">SSE Deep Dive — How It Works</a></li>
+<li><a href="#kafka-intro">Kafka from Scratch — What, Why, How</a></li>
+<li><a href="#kafka-config">Kafka Configuration in QuickServe</a></li>
+<li><a href="#kafka-flow">End-to-End Kafka Event Flow</a></li>
+<li><a href="#sse-impl">SSE Implementation — Code Walkthrough</a></li>
+<li><a href="#payment-arch">Advance Payment Flow — Architecture</a></li>
+<li><a href="#payment-impl">Payment Implementation — Code Walkthrough</a></li>
+<li><a href="#state-machine">Booking State Machine (Before &amp; After)</a></li>
+<li><a href="#db-changes">Database Changes &amp; Gotchas</a></li>
+<li><a href="#security">Security Considerations</a></li>
+<li><a href="#future">Future Improvements</a></li>
+</ol>
+</div>
+
+
+<!-- ======================================== -->
+<!-- SECTION 1: PROJECT OVERVIEW -->
+<!-- ======================================== -->
+<h2 id="overview">1. Project Overview &amp; Tech Stack</h2>
+<p>QuickServe is a household services marketplace — like Urban Company — connecting customers who need plumbing, cooking, cleaning, etc. with local skilled providers. It's built as a <strong>full-stack learning project</strong> using production-grade tools.</p>
+
+<div class="card card-blue">
+<h4>🏗️ Tech Stack</h4>
+<table>
+<tr><th>Layer</th><th>Technology</th><th>Why</th></tr>
+<tr><td>Backend</td><td>Spring Boot 4 (Java 17)</td><td>Industry standard, rich ecosystem, built-in Kafka/Redis support</td></tr>
+<tr><td>Event Broker</td><td>Apache Kafka</td><td>Async event processing, decoupled modules</td></tr>
+<tr><td>Database</td><td>PostgreSQL + PostGIS</td><td>Relational data + geo-spatial queries for "providers near me"</td></tr>
+<tr><td>Cache</td><td>Redis</td><td>Provider online/offline status, fast geo lookups</td></tr>
+<tr><td>Auth</td><td>Spring Security + JWT</td><td>Stateless authentication, role-based access</td></tr>
+<tr><td>Frontend</td><td>React (Vite) + Tailwind CSS</td><td>Fast SPA development</td></tr>
+<tr><td>Infra</td><td>Docker Compose</td><td>Local dev environment for Kafka, Postgres, Redis</td></tr>
+</table>
+</div>
+
+<!-- ======================================== -->
+<!-- SECTION 2: THE PROBLEM -->
+<!-- ======================================== -->
+<h2 id="problem">2. The Problem — Why Real-Time Notifications?</h2>
+
+<div class="card card-orange">
+<h4>🤔 The Scenario</h4>
+<p>Imagine this: A customer books a plumber. The plumber accepts. But the customer is staring at their screen seeing "REQUESTED" for the next 30 seconds because their app only checks for updates every 30 seconds (polling). In a real-time services marketplace, <strong>30 seconds feels like forever</strong>.</p>
+</div>
+
+<p>We needed a way for the server to <strong>instantly push</strong> notifications to the client the moment something happens — a booking accepted, a job started, a payment received. The original approach was simple polling:</p>
+
+<pre><code><span class="comment">// Old approach: Poll every 30 seconds</span>
+<span class="keyword">useEffect</span>(() => {
+  <span class="keyword">const</span> interval = <span class="keyword">setInterval</span>(() => {
+    fetchNotifications();  <span class="comment">// GET /api/v1/notifications every 30s</span>
+  }, 30000);
+  <span class="keyword">return</span> () => clearInterval(interval);
+}, []);</code></pre>
+
+<h3>Problems with Polling</h3>
+<table>
+<tr><th>Issue</th><th>Impact</th></tr>
+<tr><td>⏰ Up to 30s delay</td><td>User sees stale status; feels like the app is broken</td></tr>
+<tr><td>🔋 Wasted requests</td><td>99% of polls return "no new data" — wasted bandwidth &amp; server load</td></tr>
+<tr><td>📈 Doesn't scale</td><td>1000 users × 2 polls/min = 2000 requests/min even when nothing is happening</td></tr>
+<tr><td>🔄 Not reactive</td><td>Provider clicks Accept → customer sees it only after next poll</td></tr>
+</table>
+
+<!-- ======================================== -->
+<!-- SECTION 3: POLLING VS SSE VS WEBSOCKET -->
+<!-- ======================================== -->
+<h2 id="polling-vs-sse">3. Design Decision: Polling vs SSE vs WebSocket</h2>
+
+<p>We evaluated three approaches. Here's the full comparison:</p>
+
+<table>
+<tr><th>Feature</th><th>Polling</th><th>Server-Sent Events (SSE)</th><th>WebSocket</th></tr>
+<tr><td><strong>Direction</strong></td><td>Client → Server (pull)</td><td>Server → Client (push)</td><td>Bidirectional</td></tr>
+<tr><td><strong>Protocol</strong></td><td>HTTP request/response</td><td>HTTP (text/event-stream)</td><td>WS:// (separate protocol)</td></tr>
+<tr><td><strong>Connection</strong></td><td>New connection per poll</td><td>Single persistent connection</td><td>Single persistent connection</td></tr>
+<tr><td><strong>Auto-reconnect</strong></td><td>Manual</td><td>✅ Built-in by browser</td><td>❌ Must implement yourself</td></tr>
+<tr><td><strong>Latency</strong></td><td>Up to polling interval</td><td>~Instant (50-200ms)</td><td>~Instant</td></tr>
+<tr><td><strong>Server complexity</strong></td><td>Low</td><td>Low-Medium</td><td>High (state management)</td></tr>
+<tr><td><strong>Spring Boot support</strong></td><td>Default REST</td><td><code>SseEmitter</code> (built-in)</td><td>Requires STOMP/WebSocket config</td></tr>
+<tr><td><strong>Use case fit</strong></td><td>Simple dashboards</td><td>Notifications, live feeds</td><td>Chat, gaming, collaborative editing</td></tr>
+</table>
+
+<div class="card card-green">
+<h4>✅ Our Decision: SSE (Server-Sent Events)</h4>
+<p><strong>Why SSE over WebSocket?</strong></p>
+<ul>
+<li>Notifications are <strong>unidirectional</strong> — server pushes to client, client never pushes back through this channel</li>
+<li>SSE works over <strong>standard HTTP</strong> — no special proxy/load-balancer config needed</li>
+<li>Browser's <code>EventSource</code> API has <strong>automatic reconnection</strong> built in</li>
+<li>Spring Boot's <code>SseEmitter</code> is dead simple — no STOMP broker or WebSocket handler needed</li>
+<li>We don't need bidirectional communication (no chat feature in MVP)</li>
+</ul>
+<p><strong>Rule of thumb:</strong> If data only flows one way (server → client), use SSE. If both sides need to talk, use WebSocket.</p>
+</div>
+
+
+
+<!-- ======================================== -->
+<!-- SECTION 4: SSE DEEP DIVE -->
+<!-- ======================================== -->
+<h2 id="sse-deep">4. SSE Deep Dive — How It Works</h2>
+
+<h3>4.1 What is SSE?</h3>
+<p>Server-Sent Events (SSE) is a <strong>web standard</strong> (part of HTML5) that allows a server to push data to a browser over a single, long-lived HTTP connection. Think of it as a one-way pipe: the server keeps the connection open and sends messages whenever it wants.</p>
+
+<div class="card card-blue">
+<h4>📡 How SSE Works Under the Hood</h4>
+<ol>
+<li>Client opens a regular HTTP GET request to an SSE endpoint</li>
+<li>Server responds with <code>Content-Type: text/event-stream</code></li>
+<li>Server keeps the connection <strong>open</strong> (doesn't close it)</li>
+<li>Whenever the server has data, it writes to the response stream in a specific text format</li>
+<li>Browser's <code>EventSource</code> API parses these messages and fires JavaScript events</li>
+<li>If the connection drops, the browser <strong>automatically reconnects</strong> (typically after 3 seconds)</li>
+</ol>
+</div>
+
+<h3>4.2 SSE Message Format</h3>
+<p>SSE messages follow a simple text protocol. Each message is separated by two newlines (<code>\n\n</code>):</p>
+
+<pre><code><span class="comment">// Each SSE message looks like this on the wire:</span>
+event: notification
+data: {"id":"abc-123","title":"Booking Accepted","message":"Suresh accepted your plumbing request"}
+
+event: notification
+data: {"id":"def-456","title":"Payment Received","message":"Customer paid the advance"}
+
+<span class="comment">// A heartbeat/keepalive (comment line, starts with colon):</span>
+: keepalive</code></pre>
+
+<h3>4.3 Browser-Side: EventSource API</h3>
+<pre><code><span class="comment">// How the React frontend connects to the SSE stream</span>
+<span class="keyword">const</span> token = localStorage.getItem(<span class="string">'qs_access_token'</span>);
+
+<span class="comment">// Note: EventSource doesn't support custom headers!</span>
+<span class="comment">// That's why we pass the JWT as a query parameter</span>
+<span class="keyword">const</span> eventSource = <span class="keyword">new</span> EventSource(
+  <span class="string">`/api/v1/notifications/stream?token=${token}`</span>
+);
+
+<span class="comment">// Listen for the "connected" event (initial heartbeat)</span>
+eventSource.addEventListener(<span class="string">'connected'</span>, (e) => {
+  console.log(<span class="string">'SSE connected:'</span>, e.data);
+});
+
+<span class="comment">// Listen for "notification" events</span>
+eventSource.addEventListener(<span class="string">'notification'</span>, (e) => {
+  <span class="keyword">const</span> notification = JSON.parse(e.data);
+  <span class="comment">// Update React state → UI re-renders with the new notification</span>
+  setNotifications(prev => [notification, ...prev]);
+});
+
+<span class="comment">// Auto-reconnects on error (built-in browser behavior)</span>
+eventSource.onerror = () => console.log(<span class="string">'SSE error, will auto-reconnect...'</span>);</code></pre>
+
+<div class="card card-orange">
+<h4>⚠️ Key Challenge: Authentication for SSE</h4>
+<p>The browser's <code>EventSource</code> API <strong>does NOT support custom HTTP headers</strong>. This means you can't send <code>Authorization: Bearer &lt;jwt&gt;</code> like you do with regular API calls.</p>
+<p><strong>Our solution:</strong> We modified <code>JwtAuthFilter</code> to also check for a <code>?token=</code> query parameter as a fallback. This way, the SSE endpoint can be authenticated even though EventSource can't set headers.</p>
+<pre><code><span class="comment">// JwtAuthFilter.java — extractToken method</span>
+<span class="keyword">private</span> String extractToken(HttpServletRequest request) {
+    <span class="comment">// 1. Try Authorization header first (normal API calls)</span>
+    String bearerToken = request.getHeader(<span class="string">"Authorization"</span>);
+    <span class="keyword">if</span> (hasText(bearerToken) &amp;&amp; bearerToken.startsWith(<span class="string">"Bearer "</span>)) {
+        <span class="keyword">return</span> bearerToken.substring(7);
+    }
+    <span class="comment">// 2. Fall back to query param (SSE EventSource)</span>
+    String tokenParam = request.getParameter(<span class="string">"token"</span>);
+    <span class="keyword">if</span> (hasText(tokenParam)) {
+        <span class="keyword">return</span> tokenParam;
+    }
+    <span class="keyword">return null</span>;
+}</code></pre>
+</div>
+
+<!-- ======================================== -->
+<!-- SECTION 5: KAFKA FROM SCRATCH -->
+<!-- ======================================== -->
+<h2 id="kafka-intro">5. Kafka from Scratch — What, Why, How</h2>
+
+<h3>5.1 What is Apache Kafka?</h3>
+<p>Kafka is a <strong>distributed event streaming platform</strong>. In simple terms, it's a super-fast, reliable "message pipe" that lets different parts of your application communicate without knowing about each other.</p>
+
+<div class="card card-purple">
+<h4>🎯 Real-World Analogy</h4>
+<p>Think of Kafka as a <strong>newspaper printing press</strong>:</p>
+<ul>
+<li><strong>Publisher</strong> (Producer): Writes articles and sends them to the press</li>
+<li><strong>Newspaper</strong> (Topic): A named channel — e.g., "Sports News", "Tech News"</li>
+<li><strong>Pages</strong> (Partitions): Articles in a topic are split across pages for parallel reading</li>
+<li><strong>Subscribers</strong> (Consumers): People who subscribe to specific newspapers</li>
+<li><strong>Subscription group</strong> (Consumer Group): A family shares one subscription — only one person reads each article (no duplicates)</li>
+</ul>
+<p>The key insight: <strong>The publisher doesn't know or care who reads the newspaper.</strong> New subscribers can join anytime without changing anything about the publisher.</p>
+</div>
+
+<h3>5.2 Core Kafka Concepts</h3>
+<table>
+<tr><th>Concept</th><th>What it is</th><th>In QuickServe</th></tr>
+<tr><td><strong>Broker</strong></td><td>A Kafka server that stores and serves messages</td><td>One broker running on <code>localhost:9092</code></td></tr>
+<tr><td><strong>Topic</strong></td><td>A named channel for a category of messages</td><td><code>booking-events</code> and <code>provider-availability-events</code></td></tr>
+<tr><td><strong>Partition</strong></td><td>Sub-divisions of a topic for parallelism</td><td>3 partitions per topic</td></tr>
+<tr><td><strong>Producer</strong></td><td>Sends messages to a topic</td><td><code>BookingEventProducer</code> — publishes booking state changes</td></tr>
+<tr><td><strong>Consumer</strong></td><td>Reads messages from a topic</td><td><code>BookingEventConsumer</code> — creates notifications</td></tr>
+<tr><td><strong>Consumer Group</strong></td><td>A set of consumers that share the work of reading a topic</td><td><code>quickserve-notification-group</code></td></tr>
+<tr><td><strong>Offset</strong></td><td>Position of a message in a partition (like a page number)</td><td>Auto-managed by Kafka</td></tr>
+<tr><td><strong>Zookeeper</strong></td><td>Manages Kafka cluster metadata (being replaced by KRaft)</td><td>Running on port 2181</td></tr>
+</table>
+
+<h3>5.3 Why Kafka Here? (Not Overkill?)</h3>
+<p>For a single-server app, you might think Kafka is overkill. You could just call <code>notificationService.createNotification()</code> directly from the Booking service. And that's exactly what we <em>also</em> do! But Kafka teaches critical concepts:</p>
+
+<div class="comparison">
+<div class="card card-red">
+<h4>❌ Without Kafka (Tight Coupling)</h4>
+<pre><code><span class="comment">// BookingService.java</span>
+<span class="keyword">public void</span> acceptBooking() {
+  booking.setStatus(ACCEPTED);
+  bookingRepo.save(booking);
+
+  <span class="comment">// Direct dependency on every downstream service:</span>
+  notificationService.notify(...);
+  emailService.sendEmail(...);
+  analyticsService.track(...);
+  smsService.sendSms(...);
+
+  <span class="comment">// Adding a new service = changing BookingService!</span>
+}</code></pre>
+</div>
+<div class="card card-green">
+<h4>✅ With Kafka (Loose Coupling)</h4>
+<pre><code><span class="comment">// BookingService.java</span>
+<span class="keyword">public void</span> acceptBooking() {
+  booking.setStatus(ACCEPTED);
+  bookingRepo.save(booking);
+
+  <span class="comment">// Just publish one event — done!</span>
+  kafkaProducer.publish(event);
+
+  <span class="comment">// BookingService doesn't know/care</span>
+  <span class="comment">// who consumes this event</span>
+}
+
+<span class="comment">// Each consumer is independent:</span>
+<span class="comment">// NotificationConsumer → creates notification</span>
+<span class="comment">// EmailConsumer → sends email (future)</span>
+<span class="comment">// AnalyticsConsumer → tracks metric (future)</span></code></pre>
+</div>
+</div>
+
+
+<!-- ======================================== -->
+<!-- SECTION 6: KAFKA CONFIGURATION -->
+<!-- ======================================== -->
+<h2 id="kafka-config">6. Kafka Configuration in QuickServe</h2>
+
+<h3>6.1 Docker Compose — Running Kafka Locally</h3>
+<p>Kafka needs three services to run: <strong>Zookeeper</strong> (cluster coordinator), <strong>Kafka Broker</strong> (the actual message server), and optionally <strong>Kafka UI</strong> (visual tool).</p>
+
+<pre><code><span class="comment"># docker-compose.yml (simplified)</span>
+services:
+  <span class="keyword">zookeeper</span>:
+    image: confluentinc/cp-zookeeper:7.6.0
+    ports: [<span class="string">"2181:2181"</span>]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  <span class="keyword">kafka</span>:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on: [zookeeper]
+    ports: [<span class="string">"9092:9092"</span>]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: <span class="string">"true"</span>   <span class="comment"># Topics created on first use</span>
+
+  <span class="keyword">kafka-ui</span>:                    <span class="comment"># Optional: visual browser at localhost:8090</span>
+    image: provectuslabs/kafka-ui:latest
+    ports: [<span class="string">"8090:8080"</span>]
+    environment:
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092</code></pre>
+
+<div class="card card-blue">
+<h4>💡 What Each Config Means</h4>
+<ul>
+<li><strong>KAFKA_BROKER_ID: 1</strong> — Unique ID for this broker (we only have one in dev)</li>
+<li><strong>KAFKA_ZOOKEEPER_CONNECT</strong> — Where to find Zookeeper</li>
+<li><strong>KAFKA_ADVERTISED_LISTENERS</strong> — The address clients (our Spring Boot app) use to connect</li>
+<li><strong>AUTO_CREATE_TOPICS</strong> — Topics are created automatically when a producer first writes to them</li>
+</ul>
+</div>
+
+<h3>6.2 Spring Boot Configuration</h3>
+<pre><code><span class="comment"># application-dev.properties</span>
+
+<span class="comment"># Where Kafka is running</span>
+spring.kafka.bootstrap-servers=<span class="string">localhost:9092</span>
+
+<span class="comment"># Consumer config</span>
+spring.kafka.consumer.group-id=<span class="string">quickserve-group</span>      <span class="comment"># Consumer group name</span>
+spring.kafka.consumer.auto-offset-reset=<span class="string">earliest</span>    <span class="comment"># Read from beginning if no offset</span>
+spring.kafka.consumer.key-deserializer=<span class="string">StringDeserializer</span>
+spring.kafka.consumer.value-deserializer=<span class="string">JsonDeserializer</span>    <span class="comment"># Auto-deserialize JSON → Java object</span>
+spring.kafka.consumer.properties.spring.json.trusted.packages=<span class="string">com.quickserve.*</span>
+
+<span class="comment"># Producer config</span>
+spring.kafka.producer.key-serializer=<span class="string">StringSerializer</span>
+spring.kafka.producer.value-serializer=<span class="string">JsonSerializer</span>    <span class="comment"># Auto-serialize Java object → JSON</span></code></pre>
+
+<h3>6.3 Java Configuration — KafkaConfig.java</h3>
+<pre><code><span class="annotation">@Configuration</span>
+<span class="keyword">public class</span> KafkaConfig {
+
+    <span class="annotation">@Value</span>(<span class="string">"${spring.kafka.bootstrap-servers}"</span>)
+    <span class="keyword">private</span> String bootstrapServers;
+
+    <span class="comment">// PRODUCER: Sends messages (Java object → JSON → Kafka)</span>
+    <span class="annotation">@Bean</span>
+    <span class="keyword">public</span> ProducerFactory&lt;String, Object&gt; producerFactory() {
+        Map&lt;String, Object&gt; config = <span class="keyword">new</span> HashMap&lt;&gt;();
+        config.put(BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.<span class="keyword">class</span>);
+        config.put(VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.<span class="keyword">class</span>);
+        <span class="keyword">return new</span> DefaultKafkaProducerFactory&lt;&gt;(config);
+    }
+
+    <span class="annotation">@Bean</span>
+    <span class="keyword">public</span> KafkaTemplate&lt;String, Object&gt; kafkaTemplate() {
+        <span class="keyword">return new</span> KafkaTemplate&lt;&gt;(producerFactory());  <span class="comment">// This is what we inject to send messages</span>
+    }
+
+    <span class="comment">// CONSUMER: Reads messages (JSON from Kafka → Java object)</span>
+    <span class="annotation">@Bean</span>
+    <span class="keyword">public</span> ConsumerFactory&lt;String, Object&gt; consumerFactory() {
+        Map&lt;String, Object&gt; config = <span class="keyword">new</span> HashMap&lt;&gt;();
+        config.put(BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        config.put(GROUP_ID_CONFIG, <span class="string">"quickserve-group"</span>);
+        config.put(KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.<span class="keyword">class</span>);
+        config.put(VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.<span class="keyword">class</span>);
+        config.put(TRUSTED_PACKAGES, <span class="string">"com.quickserve.*"</span>);  <span class="comment">// Security: only deserialize our classes</span>
+        config.put(AUTO_OFFSET_RESET_CONFIG, <span class="string">"earliest"</span>);
+        <span class="keyword">return new</span> DefaultKafkaConsumerFactory&lt;&gt;(config);
+    }
+}</code></pre>
+
+<div class="card card-green">
+<h4>🔑 Key Points About Serialization</h4>
+<ul>
+<li><strong>Producer</strong> uses <code>JsonSerializer</code> → converts your Java <code>BookingEvent</code> object into JSON bytes</li>
+<li><strong>Consumer</strong> uses <code>JsonDeserializer</code> → converts JSON bytes back into a Java object</li>
+<li><code>TRUSTED_PACKAGES</code> → security feature: only deserialize classes from <code>com.quickserve.*</code> package (prevents malicious deserialization attacks)</li>
+<li><code>auto-offset-reset=earliest</code> → if a consumer starts for the first time, read from the very beginning of the topic (don't skip old messages)</li>
+</ul>
+</div>
+
+
+<!-- ======================================== -->
+<!-- SECTION 7: END-TO-END KAFKA FLOW -->
+<!-- ======================================== -->
+<h2 id="kafka-flow">7. End-to-End Kafka Event Flow</h2>
+
+<p>Let's trace what happens when a <strong>provider accepts a booking</strong> — from button click to notification appearing on the customer's screen:</p>
+
+<div class="flow-diagram">
+<span class="highlight">Provider Browser</span>          <span class="highlight">Spring Boot</span>              <span class="highlight">Kafka</span>                <span class="highlight">Spring Boot</span>          <span class="highlight">Customer Browser</span>
+      │                        │                       │                       │                      │
+      │─ PUT /bookings/       │                       │                       │                      │
+      │  {id}/accept ────────►│                       │                       │                      │
+      │                        │                       │                       │                      │
+      │                        │<span class="status">─── 1. Validate ────</span>  │                       │                      │
+      │                        │  Is provider the     │                       │                      │
+      │                        │  booking owner?      │                       │                      │
+      │                        │  Is status REQUESTED?│                       │                      │
+      │                        │                       │                       │                      │
+      │                        │<span class="status">─── 2. Update DB ───</span> │                       │                      │
+      │                        │  status →             │                       │                      │
+      │                        │  AWAITING_PAYMENT     │                       │                      │
+      │                        │                       │                       │                      │
+      │                        │<span class="status">─── 3. Create ──────</span>│                       │                      │
+      │                        │  notification in DB  │                       │                      │
+      │                        │  + push via SSE ─────│───────────────────────│─────────────────────►│
+      │                        │                       │                       │              <span class="status">Instant!</span> │
+      │                        │<span class="arrow">─── 4. Publish ─────►</span>│ booking-events        │                      │
+      │                        │  BookingEvent         │ topic                 │                      │
+      │                        │  (AWAITING_PAYMENT)   │                       │                      │
+      │◄── 200 OK ────────────│                       │                       │                      │
+      │                        │                       │<span class="arrow">───── 5. Consume ─────►</span>│                      │
+      │                        │                       │  BookingEventConsumer │                      │
+      │                        │                       │  reads the message    │                      │
+      │                        │                       │                       │<span class="status">─── 6. Create ────</span>   │
+      │                        │                       │                       │  another notification│
+      │                        │                       │                       │  (for audit/future)  │
+</div>
+
+<h3>7.1 The Event Object</h3>
+<pre><code><span class="comment">// BookingEvent.java — What gets serialized to Kafka</span>
+<span class="annotation">@Data</span> <span class="annotation">@Builder</span>
+<span class="keyword">public class</span> BookingEvent {
+    <span class="keyword">private</span> String bookingId;         <span class="comment">// "a1b2c3d4-..."</span>
+    <span class="keyword">private</span> String customerId;        <span class="comment">// Who booked</span>
+    <span class="keyword">private</span> String customerName;      <span class="comment">// "Rahul"</span>
+    <span class="keyword">private</span> String providerUserId;    <span class="comment">// Who is providing the service</span>
+    <span class="keyword">private</span> String providerName;      <span class="comment">// "Suresh"</span>
+    <span class="keyword">private</span> String subServiceName;    <span class="comment">// "Leak Repair"</span>
+    <span class="keyword">private</span> String eventType;         <span class="comment">// "BOOKING_CREATED", "BOOKING_ACCEPTED", etc.</span>
+    <span class="keyword">private</span> LocalDateTime timestamp;
+}
+
+<span class="comment">// On Kafka, this becomes JSON:</span>
+<span class="comment">// {"bookingId":"a1b2c3d4","customerId":"...","eventType":"BOOKING_ACCEPTED",...}</span></code></pre>
+
+<h3>7.2 Producer — Publishing Events</h3>
+<pre><code><span class="annotation">@Component</span>
+<span class="keyword">public class</span> BookingEventProducer {
+
+    <span class="keyword">private static final</span> String TOPIC = <span class="string">"booking-events"</span>;
+    <span class="keyword">private final</span> KafkaTemplate&lt;String, Object&gt; kafkaTemplate;
+
+    <span class="keyword">public void</span> publishBookingEvent(Booking booking, String eventType) {
+        BookingEvent event = BookingEvent.builder()
+            .bookingId(booking.getId().toString())
+            .customerId(booking.getCustomer().getId().toString())
+            .eventType(eventType)
+            <span class="comment">// ... other fields</span>
+            .build();
+
+        <span class="comment">// Send to Kafka — key is bookingId (ensures same booking events go to same partition)</span>
+        kafkaTemplate.send(TOPIC, booking.getId().toString(), event)
+            .whenComplete((result, ex) -> {
+                <span class="keyword">if</span> (ex != null) log.error(<span class="string">"Failed to publish"</span>, ex);
+                <span class="keyword">else</span> log.info(<span class="string">"Published: {}"</span>, eventType);
+            });
+    }
+}</code></pre>
+
+<div class="card card-purple">
+<h4>🔑 Why bookingId as the Key?</h4>
+<p>Kafka uses the <strong>message key</strong> to determine which partition a message goes to. By using <code>bookingId</code> as the key, all events for the same booking go to the <strong>same partition</strong>, which guarantees they're processed <strong>in order</strong>. You never see COMPLETED before STARTED for the same booking.</p>
+</div>
+
+<h3>7.3 Consumer — Processing Events</h3>
+<pre><code><span class="annotation">@Component</span>
+<span class="keyword">public class</span> BookingEventConsumer {
+
+    <span class="annotation">@KafkaListener</span>(topics = <span class="string">"booking-events"</span>, groupId = <span class="string">"quickserve-notification-group"</span>)
+    <span class="keyword">public void</span> handleBookingEvent(BookingEvent event) {
+        Booking booking = bookingRepo.findById(event.getBookingId());
+        NotificationType type = NotificationType.valueOf(event.getEventType());
+
+        <span class="keyword">switch</span> (type) {
+            <span class="keyword">case</span> BOOKING_CREATED -> notificationService.createNotification(
+                providerUser, booking, type,
+                <span class="string">"New Booking Request"</span>,
+                event.getCustomerName() + <span class="string">" requested "</span> + event.getSubServiceName()
+            );
+            <span class="keyword">case</span> BOOKING_ACCEPTED -> <span class="comment">// notify customer</span>
+            <span class="keyword">case</span> BOOKING_STARTED -> <span class="comment">// notify customer</span>
+            <span class="keyword">case</span> BOOKING_COMPLETED -> <span class="comment">// notify customer</span>
+            <span class="keyword">case</span> BOOKING_RATED -> <span class="comment">// notify provider</span>
+        }
+    }
+}
+
+<span class="comment">// The @KafkaListener annotation does all the magic:</span>
+<span class="comment">// 1. Subscribes to the "booking-events" topic</span>
+<span class="comment">// 2. Automatically deserializes JSON → BookingEvent object</span>
+<span class="comment">// 3. Calls this method for every new message</span>
+<span class="comment">// 4. Manages offsets (tracks which messages have been processed)</span></code></pre>
+
+
+<!-- ======================================== -->
+<!-- SECTION 8: SSE IMPLEMENTATION -->
+<!-- ======================================== -->
+<h2 id="sse-impl">8. SSE Implementation — Code Walkthrough</h2>
+
+<h3>8.1 Server-Side: SseEmitterService</h3>
+<p>This is the core of the real-time push system. It manages one or more SSE connections per user (a user could have multiple tabs open).</p>
+
+<pre><code><span class="annotation">@Service</span>
+<span class="keyword">public class</span> SseEmitterService {
+
+    <span class="comment">// Thread-safe map: userId → list of active SSE connections</span>
+    <span class="keyword">private final</span> Map&lt;UUID, List&lt;SseEmitter&gt;&gt; emitters = <span class="keyword">new</span> ConcurrentHashMap&lt;&gt;();
+    <span class="keyword">private static final long</span> SSE_TIMEOUT = 300_000L; <span class="comment">// 5 minutes</span>
+
+    <span class="comment">/**
+     * Called when a user opens the SSE stream endpoint.
+     * Creates a new SseEmitter and registers it.
+     */</span>
+    <span class="keyword">public</span> SseEmitter subscribe(UUID userId) {
+        SseEmitter emitter = <span class="keyword">new</span> SseEmitter(SSE_TIMEOUT);
+
+        <span class="comment">// Add to the user's list of connections</span>
+        emitters.computeIfAbsent(userId, k -> <span class="keyword">new</span> CopyOnWriteArrayList&lt;&gt;()).add(emitter);
+
+        <span class="comment">// Clean up when connection closes (timeout, error, or client disconnect)</span>
+        Runnable cleanup = () -> {
+            List&lt;SseEmitter&gt; userEmitters = emitters.get(userId);
+            <span class="keyword">if</span> (userEmitters != null) {
+                userEmitters.remove(emitter);
+                <span class="keyword">if</span> (userEmitters.isEmpty()) emitters.remove(userId);
+            }
+        };
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(cleanup);
+        emitter.onError(e -> cleanup.run());
+
+        <span class="comment">// Send initial heartbeat so client knows connection is alive</span>
+        emitter.send(SseEmitter.event().name(<span class="string">"connected"</span>).data(<span class="string">"ok"</span>));
+        <span class="keyword">return</span> emitter;
+    }
+
+    <span class="comment">/**
+     * Push a notification to ALL active connections for a user.
+     * Called by NotificationService after saving to DB.
+     */</span>
+    <span class="keyword">public void</span> sendNotification(UUID userId, NotificationDTO notification) {
+        List&lt;SseEmitter&gt; userEmitters = emitters.get(userId);
+        <span class="keyword">if</span> (userEmitters == null) <span class="keyword">return</span>; <span class="comment">// User not connected</span>
+
+        List&lt;SseEmitter&gt; dead = <span class="keyword">new</span> ArrayList&lt;&gt;();
+        <span class="keyword">for</span> (SseEmitter emitter : userEmitters) {
+            <span class="keyword">try</span> {
+                emitter.send(SseEmitter.event().name(<span class="string">"notification"</span>).data(notification));
+            } <span class="keyword">catch</span> (IOException e) {
+                dead.add(emitter); <span class="comment">// Connection broken, mark for removal</span>
+            }
+        }
+        userEmitters.removeAll(dead); <span class="comment">// Clean up dead connections</span>
+    }
+}</code></pre>
+
+<div class="card card-blue">
+<h4>🔑 Key Design Decisions</h4>
+<ul>
+<li><strong>ConcurrentHashMap</strong> — Thread-safe because Kafka consumers and HTTP threads access this concurrently</li>
+<li><strong>CopyOnWriteArrayList</strong> — Thread-safe list that allows concurrent iteration + modification</li>
+<li><strong>5-minute timeout</strong> — Prevents resource leaks; browser auto-reconnects after timeout</li>
+<li><strong>Dead emitter cleanup</strong> — Proactively removes connections that have silently died</li>
+</ul>
+</div>
+
+<h3>8.2 Controller — SSE Endpoint</h3>
+<pre><code><span class="annotation">@RestController</span>
+<span class="annotation">@RequestMapping</span>(<span class="string">"/api/v1/notifications"</span>)
+<span class="keyword">public class</span> NotificationController {
+
+    <span class="comment">// text/event-stream tells the browser this is an SSE connection</span>
+    <span class="annotation">@GetMapping</span>(value = <span class="string">"/stream"</span>, produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    <span class="keyword">public</span> SseEmitter stream(<span class="annotation">@AuthenticationPrincipal</span> User user) {
+        <span class="keyword">return</span> sseEmitterService.subscribe(user.getId());
+    }
+}</code></pre>
+
+<h3>8.3 Integration — NotificationService bridges DB + SSE</h3>
+<pre><code><span class="annotation">@Service</span>
+<span class="keyword">public class</span> NotificationService {
+
+    <span class="keyword">public</span> Notification createNotification(User recipient, Booking booking,
+                                           NotificationType type, String title, String message) {
+        <span class="comment">// 1. Save to database (permanent storage)</span>
+        Notification saved = notificationRepository.save(
+            Notification.builder().user(recipient).booking(booking)
+                .type(type).title(title).message(message).isRead(false).build()
+        );
+
+        <span class="comment">// 2. Push via SSE (instant delivery to connected clients)</span>
+        <span class="keyword">try</span> {
+            sseEmitterService.sendNotification(recipient.getId(), NotificationDTO.from(saved));
+        } <span class="keyword">catch</span> (Exception e) {
+            <span class="comment">// Don't let SSE failures break notification creation</span>
+            <span class="comment">// The notification is already in DB — user can fetch it later</span>
+        }
+
+        <span class="keyword">return</span> saved;
+    }
+}</code></pre>
+
+<div class="card card-green">
+<h4>✅ Reliability Pattern: DB First, SSE Second</h4>
+<p>We save the notification to the database <strong>before</strong> attempting SSE push. This ensures:</p>
+<ul>
+<li>If SSE fails (user offline, connection dropped) → notification is still in DB, visible on next page load</li>
+<li>If DB fails → we throw an error, don't attempt SSE with phantom data</li>
+<li>SSE is a <strong>best-effort optimization</strong>, not the source of truth</li>
+</ul>
+</div>
+
+
+<!-- ======================================== -->
+<!-- SECTION 9: PAYMENT ARCHITECTURE -->
+<!-- ======================================== -->
+<h2 id="payment-arch">9. Advance Payment Flow — Architecture</h2>
+
+<h3>9.1 Why "After Acceptance, Before Start"?</h3>
+<p>We evaluated two approaches for the advance payment timing:</p>
+
+<div class="comparison">
+<div class="card card-red">
+<h4>❌ Pay at Booking Time</h4>
+<ul>
+<li>Customer pays before a provider is confirmed</li>
+<li>If provider declines → need refund logic</li>
+<li>Higher drop-off rate (friction before match)</li>
+<li>Customer risk: "I paid but no one accepted"</li>
+</ul>
+</div>
+<div class="card card-green">
+<h4>✅ Pay After Acceptance (Chosen)</h4>
+<ul>
+<li>Customer pays only after a real provider accepts</li>
+<li>No refund needed on decline (no payment yet)</li>
+<li>Lower friction: customer already has a confirmed match</li>
+<li>Industry standard (Urban Company, TaskRabbit)</li>
+</ul>
+</div>
+</div>
+
+<h3>9.2 The Complete Booking Lifecycle</h3>
+<div class="flow-diagram">
+<span class="status">REQUESTED</span> <span class="arrow">──────►</span> <span class="status">AWAITING_PAYMENT</span> <span class="arrow">──────►</span> <span class="status">ACCEPTED</span> <span class="arrow">──────►</span> <span class="status">IN_PROGRESS</span> <span class="arrow">──────►</span> <span class="status">COMPLETED</span> <span class="arrow">──────►</span> <span class="status">RATED</span>
+     │                    │                    │                  │                    │                │
+ Customer             Provider             Customer           Provider            Provider         Customer
+ creates              clicks              pays the            clicks              clicks           submits
+ booking              "Accept"            advance             "Start Job"         "Complete"        rating
+                         │                    │
+                         │                    │
+                    ┌────▼────┐         ┌────▼────┐
+                    │ Notify  │         │ Notify  │
+                    │Customer:│         │Provider:│
+                    │"Pay now"│         │"Paid!   │
+                    │         │         │Start job│
+                    └─────────┘         └─────────┘
+</div>
+
+<div class="card card-orange">
+<h4>🔀 The Key Trick: Status Interception</h4>
+<p>When the provider clicks "Accept", the frontend sends <code>PUT /bookings/{id}/accept</code> with <code>status=ACCEPTED</code>. But the backend <strong>intercepts</strong> this and saves <code>AWAITING_PAYMENT</code> instead:</p>
+<pre><code><span class="comment">// BookingService.java — updateBookingStatus method</span>
+<span class="keyword">if</span> (newStatus == BookingStatus.ACCEPTED &amp;&amp; booking.getStatus() == BookingStatus.REQUESTED) {
+    actualStatus = BookingStatus.AWAITING_PAYMENT;  <span class="comment">// Intercept!</span>
+}
+<span class="comment">// The provider doesn't need to know about AWAITING_PAYMENT.</span>
+<span class="comment">// They click "Accept" → backend handles the payment gate automatically.</span></code></pre>
+</div>
+
+<h3>9.3 Payment Entity Design</h3>
+<p>The Payment table is designed to be <strong>gateway-agnostic</strong> — it works with our simulated gateway now, and can plug into Razorpay/Stripe later without schema changes.</p>
+
+<table>
+<tr><th>Column</th><th>Type</th><th>Purpose</th></tr>
+<tr><td><code>id</code></td><td>UUID</td><td>Primary key</td></tr>
+<tr><td><code>booking_id</code></td><td>UUID (FK)</td><td>Links to the booking being paid for</td></tr>
+<tr><td><code>payer_id</code></td><td>UUID (FK)</td><td>The customer making the payment</td></tr>
+<tr><td><code>amount</code></td><td>DECIMAL(10,2)</td><td>Payment amount</td></tr>
+<tr><td><code>status</code></td><td>ENUM</td><td><span class="badge badge-orange">PENDING</span> <span class="badge badge-green">SUCCESS</span> <span class="badge badge-orange">FAILED</span> <span class="badge badge-purple">REFUNDED</span></td></tr>
+<tr><td><code>gateway</code></td><td>VARCHAR(30)</td><td><code>SIMULATED</code> / <code>RAZORPAY</code> / <code>STRIPE</code></td></tr>
+<tr><td><code>gateway_transaction_id</code></td><td>VARCHAR(100)</td><td>Transaction ID from the payment provider</td></tr>
+<tr><td><code>paid_at</code></td><td>TIMESTAMP</td><td>When payment was confirmed</td></tr>
+</table>
+
+
+<!-- ======================================== -->
+<!-- SECTION 10: PAYMENT IMPLEMENTATION -->
+<!-- ======================================== -->
+<h2 id="payment-impl">10. Payment Implementation — Code Walkthrough</h2>
+
+<h3>10.1 PaymentService — The Core Logic</h3>
+<pre><code><span class="annotation">@Service</span>
+<span class="keyword">public class</span> PaymentService {
+
+    <span class="annotation">@Transactional</span>
+    <span class="keyword">public</span> Payment processAdvancePayment(UUID bookingId, UUID payerUserId) {
+
+        <span class="comment">// ── STEP 1: Validate ──────────────────────────────────────────</span>
+        Booking booking = bookingRepo.findById(bookingId)
+            .orElseThrow(() -> <span class="keyword">new</span> ResourceNotFoundException(<span class="string">"Booking"</span>, <span class="string">"id"</span>, bookingId));
+
+        <span class="comment">// Only the customer who made the booking can pay</span>
+        <span class="keyword">if</span> (!booking.getCustomer().getId().equals(payerUserId))
+            <span class="keyword">throw new</span> UnauthorizedException(<span class="string">"Only the booking customer can pay"</span>);
+
+        <span class="comment">// Must be in AWAITING_PAYMENT state</span>
+        <span class="keyword">if</span> (booking.getStatus() != BookingStatus.AWAITING_PAYMENT)
+            <span class="keyword">throw new</span> InvalidStateException(<span class="string">"Payment only allowed in AWAITING_PAYMENT"</span>);
+
+        <span class="comment">// Prevent double payment</span>
+        <span class="keyword">if</span> (paymentRepo.findByBookingId(bookingId).isPresent())
+            <span class="keyword">throw new</span> InvalidStateException(<span class="string">"Payment already exists"</span>);
+
+        <span class="comment">// ── STEP 2: Process Payment (Simulated) ──────────────────────</span>
+        <span class="comment">// TODO: Replace with Razorpay/Stripe SDK</span>
+        String txnId = <span class="string">"SIM_"</span> + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
+
+        Payment payment = Payment.builder()
+            .booking(booking)
+            .payer(booking.getCustomer())
+            .amount(booking.getEstimatedCost())
+            .status(PaymentStatus.SUCCESS)           <span class="comment">// Always succeeds for now</span>
+            .gateway(<span class="string">"SIMULATED"</span>)                    <span class="comment">// Will be "RAZORPAY" later</span>
+            .gatewayTransactionId(txnId)
+            .paidAt(LocalDateTime.now())
+            .build();
+        paymentRepo.save(payment);
+
+        <span class="comment">// ── STEP 3: Transition Booking ───────────────────────────────</span>
+        booking.setStatus(BookingStatus.ACCEPTED);   <span class="comment">// AWAITING_PAYMENT → ACCEPTED</span>
+        booking.setPaidAt(LocalDateTime.now());
+        bookingRepo.save(booking);
+
+        <span class="comment">// ── STEP 4: Notify Provider ──────────────────────────────────</span>
+        notificationService.createNotification(
+            providerUser, booking, NotificationType.PAYMENT_CONFIRMED,
+            <span class="string">"Payment Received"</span>,
+            customerName + <span class="string">" paid the advance. You can start the job!"</span>
+        );
+
+        <span class="keyword">return</span> payment;
+    }
+}</code></pre>
+
+<div class="card card-purple">
+<h4>🔮 Swapping in Razorpay/Stripe Later</h4>
+<p>When you're ready to add a real payment gateway, you only need to change <strong>Step 2</strong>:</p>
+<pre><code><span class="comment">// Future: Real Razorpay integration</span>
+<span class="comment">// 1. Create a Razorpay Order (server-side)</span>
+RazorpayOrder order = razorpayClient.createOrder(amount, currency);
+
+<span class="comment">// 2. Return order ID to frontend</span>
+<span class="comment">// 3. Frontend opens Razorpay checkout UI</span>
+<span class="comment">// 4. Customer pays → Razorpay calls your webhook</span>
+<span class="comment">// 5. Webhook handler verifies signature and calls processPayment()</span>
+
+Payment payment = Payment.builder()
+    .gateway(<span class="string">"RAZORPAY"</span>)                     <span class="comment">// Changed!</span>
+    .gatewayTransactionId(razorpayPaymentId) <span class="comment">// Real txn ID!</span>
+    .status(PaymentStatus.SUCCESS)
+    .build();</code></pre>
+<p>The rest of the flow (booking status transition, notifications) stays <strong>exactly the same</strong>.</p>
+</div>
+
+
+<!-- ======================================== -->
+<!-- SECTION 11: STATE MACHINE -->
+<!-- ======================================== -->
+<h2 id="state-machine">11. Booking State Machine (Before &amp; After)</h2>
+
+<div class="comparison">
+<div class="card card-blue">
+<h4>Before (Original)</h4>
+<pre><code>REQUESTED
+    ├── ACCEPTED
+    │     └── IN_PROGRESS
+    │           └── COMPLETED
+    │                 └── RATED
+    └── DECLINED</code></pre>
+<p><strong>6 states, no payment gate</strong></p>
+</div>
+<div class="card card-green">
+<h4>After (With Payment)</h4>
+<pre><code>REQUESTED
+    ├── <span class="status">AWAITING_PAYMENT</span>  ← NEW!
+    │     └── ACCEPTED
+    │           └── IN_PROGRESS
+    │                 └── COMPLETED
+    │                       └── RATED
+    └── DECLINED</code></pre>
+<p><strong>7 states, payment gate between accept &amp; start</strong></p>
+</div>
+</div>
+
+<h3>11.1 State Transition Rules (Who Can Do What)</h3>
+<table>
+<tr><th>Transition</th><th>Who</th><th>Guard Condition</th></tr>
+<tr><td>REQUESTED → AWAITING_PAYMENT</td><td>Provider (clicks Accept)</td><td>Must be the assigned provider</td></tr>
+<tr><td>REQUESTED → DECLINED</td><td>Provider (clicks Decline)</td><td>Must be the assigned provider</td></tr>
+<tr><td>AWAITING_PAYMENT → ACCEPTED</td><td>System (after customer pays)</td><td>Payment must succeed; no double-pay</td></tr>
+<tr><td>ACCEPTED → IN_PROGRESS</td><td>Provider (clicks Start Job)</td><td>Must be ACCEPTED (payment confirmed)</td></tr>
+<tr><td>IN_PROGRESS → COMPLETED</td><td>Provider (clicks Complete)</td><td>Must be IN_PROGRESS</td></tr>
+<tr><td>COMPLETED → RATED</td><td>Customer (submits rating)</td><td>One rating per booking</td></tr>
+</table>
+
+<!-- ======================================== -->
+<!-- SECTION 12: DATABASE CHANGES -->
+<!-- ======================================== -->
+<h2 id="db-changes">12. Database Changes &amp; Gotchas</h2>
+
+<div class="card card-red">
+<h4>🐛 Gotcha: Hibernate Can't Update CHECK Constraints</h4>
+<p>We use <code>spring.jpa.hibernate.ddl-auto=update</code> which auto-creates/modifies tables. But when we added <code>AWAITING_PAYMENT</code> to the <code>BookingStatus</code> enum, Hibernate <strong>did not update</strong> the existing PostgreSQL CHECK constraint on the <code>status</code> column.</p>
+<p><strong>Result:</strong> Inserting a booking with <code>status='AWAITING_PAYMENT'</code> threw a constraint violation error.</p>
+<p><strong>Fix:</strong> We had to manually drop and recreate the constraint:</p>
+<pre><code><span class="comment">-- Drop old constraint</span>
+<span class="keyword">ALTER TABLE</span> bookings <span class="keyword">DROP CONSTRAINT</span> bookings_status_check;
+
+<span class="comment">-- Create new constraint with AWAITING_PAYMENT included</span>
+<span class="keyword">ALTER TABLE</span> bookings <span class="keyword">ADD CONSTRAINT</span> bookings_status_check
+  <span class="keyword">CHECK</span> (status <span class="keyword">IN</span> (<span class="string">'REQUESTED'</span>, <span class="string">'AWAITING_PAYMENT'</span>, <span class="string">'ACCEPTED'</span>,
+                      <span class="string">'DECLINED'</span>, <span class="string">'IN_PROGRESS'</span>, <span class="string">'COMPLETED'</span>, <span class="string">'RATED'</span>));
+
+<span class="comment">-- Same for notifications type column</span>
+<span class="keyword">ALTER TABLE</span> notifications <span class="keyword">DROP CONSTRAINT</span> notifications_type_check;
+<span class="keyword">ALTER TABLE</span> notifications <span class="keyword">ADD CONSTRAINT</span> notifications_type_check
+  <span class="keyword">CHECK</span> (type <span class="keyword">IN</span> (<span class="string">'BOOKING_CREATED'</span>, <span class="string">'BOOKING_ACCEPTED'</span>, <span class="string">'BOOKING_DECLINED'</span>,
+                   <span class="string">'BOOKING_STARTED'</span>, <span class="string">'BOOKING_COMPLETED'</span>, <span class="string">'BOOKING_RATED'</span>,
+                   <span class="string">'PAYMENT_REQUIRED'</span>, <span class="string">'PAYMENT_CONFIRMED'</span>));</code></pre>
+<p><strong>Lesson:</strong> Hibernate's <code>ddl-auto=update</code> is great for adding columns/tables, but <strong>never modifies existing constraints</strong>. In production, always use migration tools like <strong>Flyway</strong> or <strong>Liquibase</strong>.</p>
+</div>
+
+<h3>12.1 New Tables Created</h3>
+<table>
+<tr><th>Table</th><th>Purpose</th><th>Created By</th></tr>
+<tr><td><code>payments</code></td><td>Stores all payment records</td><td>Hibernate auto-create</td></tr>
+</table>
+
+<h3>12.2 Modified Tables</h3>
+<table>
+<tr><th>Table</th><th>Change</th><th>Done By</th></tr>
+<tr><td><code>bookings</code></td><td>Added <code>paid_at</code> column; updated status CHECK constraint</td><td>Hibernate (column) + Manual SQL (constraint)</td></tr>
+<tr><td><code>notifications</code></td><td>Updated type CHECK constraint for new notification types</td><td>Manual SQL</td></tr>
+</table>
+
+
+<!-- ======================================== -->
+<!-- SECTION 13: SECURITY -->
+<!-- ======================================== -->
+<h2 id="security">13. Security Considerations</h2>
+
+<div class="card card-blue">
+<h4>🔒 How We Secured Each Layer</h4>
+<table>
+<tr><th>Layer</th><th>Mechanism</th><th>Details</th></tr>
+<tr><td><strong>Authentication</strong></td><td>JWT (JSON Web Token)</td><td>Stateless; 1-hour expiry; refresh token flow</td></tr>
+<tr><td><strong>Authorization</strong></td><td>Role-based (CUSTOMER/PROVIDER)</td><td>Provider can't create bookings; Customer can't accept them</td></tr>
+<tr><td><strong>SSE Auth</strong></td><td>JWT via query param</td><td>Fallback because EventSource can't set headers</td></tr>
+<tr><td><strong>Payment Auth</strong></td><td>Customer ID verification</td><td>Only the booking's customer can pay for it</td></tr>
+<tr><td><strong>State Machine</strong></td><td>Server-side validation</td><td>Can't skip states; can't go backwards; role-checked</td></tr>
+<tr><td><strong>Kafka Deserialization</strong></td><td>Trusted packages</td><td>Only <code>com.quickserve.*</code> classes can be deserialized</td></tr>
+<tr><td><strong>Passwords</strong></td><td>BCrypt hashing</td><td>One-way hash; salt included</td></tr>
+<tr><td><strong>CORS</strong></td><td>Whitelist origins</td><td>Only <code>localhost:3000</code> and <code>localhost:5173</code> allowed</td></tr>
+</table>
+</div>
+
+<!-- ======================================== -->
+<!-- SECTION 14: FUTURE IMPROVEMENTS -->
+<!-- ======================================== -->
+<h2 id="future">14. Future Improvements</h2>
+
+<table>
+<tr><th>Area</th><th>Current</th><th>Future</th></tr>
+<tr><td><strong>Payment</strong></td><td>Simulated (always success)</td><td>Razorpay/Stripe integration with webhooks</td></tr>
+<tr><td><strong>SSE Scaling</strong></td><td>In-memory (single server)</td><td>Redis Pub/Sub for multi-server SSE broadcasting</td></tr>
+<tr><td><strong>Notifications</strong></td><td>In-app only (SSE)</td><td>Push notifications (FCM), SMS, Email</td></tr>
+<tr><td><strong>DB Migrations</strong></td><td>Hibernate auto + manual SQL</td><td>Flyway/Liquibase for version-controlled migrations</td></tr>
+<tr><td><strong>Kafka</strong></td><td>Single broker, auto-created topics</td><td>Multi-broker cluster, manual topic management, DLQ</td></tr>
+<tr><td><strong>Payment Failures</strong></td><td>No failure handling</td><td>Retry logic, refund flow, partial payment</td></tr>
+<tr><td><strong>Chat</strong></td><td>Not implemented</td><td>WebSocket-based real-time chat (SSE → WebSocket upgrade)</td></tr>
+</table>
+
+<!-- ======================================== -->
+<!-- ARCHITECTURE SUMMARY DIAGRAM -->
+<!-- ======================================== -->
+<h2>🏗️ Architecture Summary</h2>
+
+<div class="flow-diagram">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          <span class="highlight">FRONTEND (React + Vite)</span>                          │
+│                                                                             │
+│  ┌─────────────┐  ┌──────────────┐  ┌───────────────┐  ┌───────────────┐  │
+│  │  BookingPage │  │ ProviderDash │  │ Notifications │  │  PaymentCard  │  │
+│  └──────┬──────┘  └──────┬───────┘  └───────┬───────┘  └───────┬───────┘  │
+│         │                │                   │                   │         │
+│         │    REST API    │     <span class="status">SSE Stream</span>    │      REST API     │         │
+└─────────┼────────────────┼───────────────────┼───────────────────┼─────────┘
+          │                │                   │                   │
+┌─────────▼────────────────▼───────────────────▼───────────────────▼─────────┐
+│                     <span class="highlight">SPRING BOOT APPLICATION</span>                               │
+│                                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐  ┌─────────┐ │
+│  │ Booking  │  │ Payment  │  │ Notification │  │  Search  │  │  Auth   │ │
+│  │ Service  ├──►│ Service  │  │   Service    │  │ Service  │  │ (JWT)   │ │
+│  └────┬─────┘  └──────────┘  └──────▲───────┘  └──────────┘  └─────────┘ │
+│       │                              │                                     │
+│       │  <span class="arrow">publish</span>                     │  <span class="status">consume</span>                              │
+│  ┌────▼────────────────────────────┼─────────────────────────────────────┐ │
+│  │              <span class="highlight">APACHE KAFKA</span>        │                                     │ │
+│  │  ┌─────────────────┐    ┌──────┴──────────────┐                      │ │
+│  │  │ booking-events  │    │ BookingEventConsumer │                      │ │
+│  │  │   (3 partitions)│    │ @KafkaListener       │                      │ │
+│  │  └─────────────────┘    └─────────────────────┘                      │ │
+│  └──────────────────────────────────────────────────────────────────────┘ │
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │  <span class="highlight">SSE (SseEmitterService)</span>                                               │  │
+│  │  ConcurrentHashMap&lt;userId, List&lt;SseEmitter&gt;&gt;                        │  │
+│  │  Pushes NotificationDTO to connected browsers instantly             │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │                │                   │
+┌─────────▼────────┐ ┌────▼──────┐ ┌──────────▼──────────┐
+│   <span class="highlight">PostgreSQL</span>     │ │  <span class="highlight">Redis</span>    │ │   <span class="highlight">Zookeeper</span>         │
+│   + PostGIS      │ │  Cache    │ │   (Kafka metadata)  │
+│   Port 5432      │ │  Port 6379│ │   Port 2181         │
+└──────────────────┘ └───────────┘ └─────────────────────┘
+</div>
+
+<footer>
+<p>📄 QuickServe Technical Deep Dive — Generated for learning reference</p>
+<p>Built with Spring Boot 4 + React + Kafka + PostgreSQL + Redis</p>
+<p>© 2026 QuickServe Learning Project</p>
+</footer>
+
+</div> <!-- end container -->
+</body>
+</html>
